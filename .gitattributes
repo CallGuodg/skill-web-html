@@ -1,0 +1,12 @@
+# GitHub Actions 的 YAML run: 块与 shell 脚本对 CRLF 敏感，
+# Windows 上 core.autocrlf=true 会注入 \r 导致 "\r: command not found"。
+# 统一在索引与工作区都用 LF。
+* text=auto eol=lf
+
+# 二进制资源不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.zip binary

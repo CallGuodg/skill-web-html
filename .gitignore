@@ -1,0 +1,33 @@
+# 凭证：绝不入库
+.env
+.env.*
+credentials.json
+auth.json
+token.json
+secrets.json
+*.pem
+id_rsa
+id_ed25519
+
+# Python / 工具产物
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# 发布暂存目录
+.stage/
+skillhub-stage-*/
+*.zip
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# WorkBuddy 本地项目数据（记忆、会话配置），不入库
+.workbuddy/

@@ -1,0 +1,58 @@
+name: Skill Preflight (PR)
+
+# Pull Request 只做校验，永远不接触凭证、永远不提交发布。
+# 分支保护规则里把本检查设为 required，即可保证 main 上的每个 Skill 都是可发布状态。
+on:
+  pull_request:
+    paths:
+      - 'skills/**'
+      - 'scripts/**'
+      - 'publish.config.json'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-preflight-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: 阻断式预检 + CLI dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 逐项 preflight（人读报告）
+        run: |
+          set -euo pipefail
+          rc=0
+          for d in skills/*/; do
+            [ -f "$d/SKILL.md" ] || continue
+            python3 scripts/preflight.py "$d" --config publish.config.json || rc=1
+          done
+          exit $rc
+
+      - name: 安装 SkillHub CLI（仅 CLI，先落盘再执行，便于审计）
+        run: |
+          set -euo pipefail
+          curl -fsSL https://skillhub.cn/install/install.sh -o /tmp/skillhub-install.sh
+          bash /tmp/skillhub-install.sh --cli-only
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          command -v skillhub && skillhub --version
+
+      - name: 全流程 dry-run（不注入任何 Secret）
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          python3 scripts/publish.py --dry-run

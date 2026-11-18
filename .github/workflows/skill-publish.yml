@@ -1,0 +1,167 @@
+name: Publish Skills to SkillHub
+
+# 发布通道：打 vX.Y.Z tag 自动发版，或手动 dispatch 触发。
+# 刻意不对 push main 自动发布——每次合并都发版会冲掉审核节奏，也容易导致版本号没 bump。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只做预检，不提交发布'
+        type: boolean
+        default: false
+      skill:
+        description: '只发布某个 slug（留空 = 全部）'
+        type: string
+        default: ''
+      version_source:
+        description: '版本来源'
+        type: choice
+        options:
+          - frontmatter
+          - tag
+        default: frontmatter
+      strict:
+        description: '把 preflight 警告升级为阻断'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# 同一个 ref 上不允许并发发布，避免重复提交同一版本
+concurrency:
+  group: skillhub-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Job 1：不注入任何 Secret。校验不过就根本走不到发布。
+  # -------------------------------------------------------------------------
+  preflight:
+    name: 阻断式预检 + CLI dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 逐项 preflight
+        run: |
+          set -euo pipefail
+          rc=0
+          for d in skills/*/; do
+            [ -f "$d/SKILL.md" ] || continue
+            python3 scripts/preflight.py "$d" --config publish.config.json || rc=1
+          done
+          exit $rc
+
+      - name: 安装 SkillHub CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://skillhub.cn/install/install.sh -o /tmp/skillhub-install.sh
+          bash /tmp/skillhub-install.sh --cli-only
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: 全流程 dry-run
+        env:
+          INPUT_VERSION_SOURCE: ${{ inputs.version_source }}
+          INPUT_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          python3 scripts/publish.py --dry-run \
+            --version-source "${INPUT_VERSION_SOURCE:-frontmatter}" \
+            --tag "$INPUT_TAG"
+
+  # -------------------------------------------------------------------------
+  # Job 2：唯一持有凭证的 job。可在 GitHub Environment 上加人工审批。
+  # -------------------------------------------------------------------------
+  publish:
+    name: 发布到 SkillHub
+    needs: [preflight]
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: skillhub-production
+    env:
+      # Secret 只在这里注入；preflight job 完全拿不到
+      SKILLHUB_KEY: ${{ secrets.SKILLHUB_KEY }}
+      SKILLHUB_PUBLISHER: ${{ vars.SKILLHUB_PUBLISHER }}
+      SKILLHUB_HOST: https://api.skillhub.cn
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 校验 Secret 已配置
+        run: |
+          set -euo pipefail
+          if [ -z "${SKILLHUB_KEY:-}" ]; then
+            echo "::error::缺少 Secret SKILLHUB_KEY，请到 Settings → Secrets and variables → Actions 添加"
+            exit 1
+          fi
+          echo "SKILLHUB_KEY 已配置（值不会输出）"
+
+      - name: 安装 SkillHub CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://skillhub.cn/install/install.sh -o /tmp/skillhub-install.sh
+          bash /tmp/skillhub-install.sh --cli-only
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: 计算上一版本引用（用于版本递增校验与 changelog）
+        id: base
+        run: |
+          set -euo pipefail
+          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          echo "ref=$prev" >> "$GITHUB_OUTPUT"
+          if [ -n "$prev" ]; then
+            echo "PUBLISH_BASE_REF=$prev" >> "$GITHUB_ENV"
+            echo "上一版本 tag: $prev"
+          else
+            echo "首次发版，跳过版本递增校验"
+          fi
+
+      - name: 发布
+        # 所有 dispatch 输入都经 env 传入，不直接插值进 shell，避免命令注入
+        env:
+          INPUT_VERSION_SOURCE: ${{ inputs.version_source }}
+          INPUT_SKILL: ${{ inputs.skill }}
+          INPUT_STRICT: ${{ inputs.strict }}
+          INPUT_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          args=(
+            --version-source "${INPUT_VERSION_SOURCE:-frontmatter}"
+            --tag "$INPUT_TAG"
+          )
+          if [ -n "${INPUT_SKILL:-}" ]; then
+            args+=( --only "$INPUT_SKILL" )
+          fi
+          if [ "${INPUT_STRICT:-false}" = "true" ]; then
+            args+=( --strict )
+          fi
+          python3 scripts/publish.py "${args[@]}"
+
+      - name: 汇总提示
+        if: always()
+        run: |
+          echo "status=pending_review 表示已提交待平台三线安全审核，不等于失败。"
+          echo "审核结果请到 https://skillhub.cn/dashboard 的「我的 Skill」查看。"

@@ -1,0 +1,25 @@
+{
+  "host": "https://api.skillhub.cn",
+  "version_source": "frontmatter",
+  "publish_on": {
+    "tag": true,
+    "push_main": false,
+    "manual": true
+  },
+  "overrides": {
+    "license": "MIT",
+    "category": "开发工具",
+    "homepage": "https://github.com/CallGuodg/skill-web-html"
+  },
+  "skills": [
+    {
+      "path": "skills/skill-web-html",
+      "slug": "skill-web-html",
+      "overrides": {
+        "displayName": "网页转单文件 HTML",
+        "summary": "把网页文章保存为可离线阅读的单文件 HTML",
+        "tags": ["网页存档", "HTML", "离线阅读"]
+      }
+    }
+  ]
+}
